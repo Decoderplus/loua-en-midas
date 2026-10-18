@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Loua &amp; Midas gaan naar Zwitserland</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #2b1450; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; touch-action: none; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #slot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #2b1450ee; color: #fff; font: 14px "Press Start 2P", monospace; text-align: center; z-index: 2; }
+  #slot p { color: #ffd23f; line-height: 2; margin: 0; } #slot small { color: #ffb3dc; font-size: 9px; }
+  #slot input, #slot button { font: inherit; padding: 12px 16px; border: 3px solid #ff9ad5; border-radius: 0; background: #fff; color: #2a1838; }
+  #slot button { background: #ff4d8d; color: #fff; cursor: pointer; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="360"></canvas>
+<form id="slot" autocomplete="off">
+  <p>LOUA &amp; MIDAS<br><small>GAAN NAAR ZWITSERLAND</small></p>
+  <input id="ww" type="password" placeholder="wachtwoord" aria-label="Wachtwoord" autofocus>
+  <button>SPELEN</button>
+  <small id="fout"></small>
+</form>
+<script src="sprites-slot.js"></script>
+<script>
+// ---------- Basis ----------
+// De wereld rekent in 320x180 eenheden en wordt 2x getekend; de kinderen worden op volle resolutie getekend.
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const W=320, H=180, GROND=150;
+const FONT = '"Press Start 2P", monospace';
+let staat='titel', tijd=0, score=0, beste=0, snelheid=90, afstand=0;
+try{ beste = +localStorage.getItem('loua-midas-beste')||0; }catch(e){}
+
+// ---------- De kinderen (uitgeknipt uit de filmpjes) ----------
+function laad(src){ const i=new Image(); i.src=src; return i; }
+const BEELD = {};
+// De beelden van de kinderen zijn versleuteld; pas met het wachtwoord komen ze tevoorschijn.
+const b64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+async function ontsleutel(pw){
+  const basis = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
+  const sleutel = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b64(SLOT.salt), iterations: 200000, hash: "SHA-256" }, basis, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const uit = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(SLOT.iv) }, sleutel, b64(SLOT.data));
+  return JSON.parse(new TextDecoder().decode(uit));
+}
+function zetBeelden(data){
+  for (const k in data) BEELD[k]=laad(data[k]);
+  BEELD.p_staan.onload=()=>{ BEELD.p_bukken=maakBukken(BEELD.p_staan); };
+  }
+async function probeer(pw, stil){
+  try { zetBeelden(await ontsleutel(pw)); document.getElementById("slot").remove(); try{ localStorage.setItem("loua-midas-ww", pw); }catch(e){} return true; }
+  catch(e){ if(!stil) document.getElementById("fout").textContent = "DAT IS HEM NIET"; return false; }
+}
+document.getElementById("slot").addEventListener("submit", e => { e.preventDefault(); probeer(document.getElementById("ww").value.trim().toLowerCase()); });
+try { const w = localStorage.getItem("loua-midas-ww"); if (w) probeer(w, true); } catch(e){}
+// De piraat bukt in de filmpjes achter de fee; zijn bukhouding maken we uit zijn staande beeld.
+function maakBukken(bron){
+  const c=document.createElement('canvas'), w=bron.width, h=bron.height;
+  const boven=Math.round(h*.58), onder=Math.round(h*.16);
+  c.width=w+6; c.height=boven+onder-2;
+  const x=c.getContext('2d');
+  x.drawImage(bron,0,h-onder,w,onder,3,boven-2,w,onder);   // voeten
+  x.drawImage(bron,0,0,w,boven,0,0,w+6,boven);              // hoofd en lijf, iets breder
+  return c;
+}
+
+const SPELERS=[
+  {naam:'LOUA', pre:'m', x:26, kleur:'#c98cff', toetsSpring:['KeyW'], toetsBuk:['KeyS']},
+  {naam:'MIDAS',  pre:'p', x:64, kleur:'#ff4d6d', toetsSpring:['ArrowUp','Space'], toetsBuk:['ArrowDown']},
+];
+function resetSpeler(s){ Object.assign(s,{y:0,vy:0,bukt:false,opGrond:true,onkwetsbaar:0,levens:3,sterren:0,uit:false,wilSpringen:false,wilBukken:false,aanraakBuk:false,vorigSpring:false}); }
+SPELERS.forEach(resetSpeler);
+
+let obstakels=[], sterren=[], deeltjes=[], volgende=1.2, sterVolgende=0.8, flits=0;
+
+// ---------- Geluid (chiptune-bliepjes) ----------
+let ac=null;
+function bliep(f1,f2,duur,type='square',vol=.08){
+  try{
+    ac = ac || new (window.AudioContext||window.webkitAudioContext)();
+    const o=ac.createOscillator(), v=ac.createGain(), t=ac.currentTime;
+    o.type=type; o.frequency.setValueAtTime(f1,t); o.frequency.exponentialRampToValueAtTime(f2,t+duur);
+    v.gain.setValueAtTime(vol,t); v.gain.exponentialRampToValueAtTime(.001,t+duur);
+    o.connect(v); v.connect(ac.destination); o.start(t); o.stop(t+duur);
+  }catch(e){}
+}
+const MELODIE=[523,659,784,659,880,784,659,587, 523,659,784,1047,988,784,659,0];
+let noot=0, notenKlok=0;
+
+// ---------- Besturing: toetsenbord, Xbox-controller, aanraken ----------
+const toets={};
+function actie(i){ // spring-knop van speler i
+  if(document.getElementById("slot")) return;
+  if(staat==='titel'){ start(); return; }
+  if(staat==='af'){ if(tijd>1) staat='titel'; return; }
+  const s=SPELERS[i];
+  if(!s.uit && s.opGrond){ s.vy=-250; s.opGrond=false; bliep(i?300:420,i?900:1200,.15); stof(s.x+8); }
+}
+addEventListener('keydown',e=>{
+  if(document.getElementById("slot")) return;
+  if(['Space','ArrowUp','ArrowDown'].includes(e.code)) e.preventDefault();
+  if(toets[e.code]) return; toets[e.code]=true;
+  SPELERS.forEach((s,i)=>{ if(s.toetsSpring.includes(e.code)) actie(i); });
+  if(e.code==='Enter') actie(0);
+});
+addEventListener('keyup',e=>{ toets[e.code]=false; });
+
+// Controller 1 = Tutu-fee, controller 2 = Piraat. A of omhoog = springen, B of omlaag = bukken.
+const padVorig=[{},{}];
+function leesControllers(){
+  const pads=[...(navigator.getGamepads?navigator.getGamepads():[])].filter(Boolean);
+  SPELERS.forEach(s=>s.padBuk=false);
+  pads.slice(0,2).forEach((p,i)=>{
+    const knop=n=>p.buttons[n]&&p.buttons[n].pressed;
+    const spring = knop(0)||knop(12)||knop(3)||(p.axes[1]<-.6);
+    const buk    = knop(1)||knop(13)||(p.axes[1]>.5);
+    const start  = knop(9);
+    if(spring && !padVorig[i].spring) actie(i);
+    if(start && !padVorig[i].start) actie(i);
+    SPELERS[i].padBuk=buk;
+    padVorig[i]={spring,start};
+  });
+  return pads.length;
+}
+addEventListener('gamepadconnected',e=>{ bliep(660,1320,.15); });
+
+// Aanraken: linkerhelft = Tutu-fee, rechterhelft = Piraat. Bovenkant springen, onderkant vasthouden = bukken.
+const aanrakingen=new Map();
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  const r=cv.getBoundingClientRect(), x=(e.clientX-r.left)/r.width, y=(e.clientY-r.top)/r.height;
+  const i = x<.5?0:1;
+  if(staat==='spel' && y>.55){ aanrakingen.set(e.pointerId,i); SPELERS[i].aanraakBuk=true; }
+  else actie(i);
+});
+function los(e){ const i=aanrakingen.get(e.pointerId); if(i!==undefined){ SPELERS[i].aanraakBuk=false; aanrakingen.delete(e.pointerId);} }
+addEventListener('pointerup',los); addEventListener('pointercancel',los);
+
+function start(){
+  staat='spel'; score=0; snelheid=90; afstand=0; obstakels=[]; sterren=[]; deeltjes=[];
+  volgende=1.5; sterVolgende=.8; SPELERS.forEach(resetSpeler);
+  bliep(400,1200,.3,'square',.06);
+}
+
+// ---------- Wereld ----------
+const SOORTEN=[
+  {naam:'paddo',laag:true, w:20,h:18},
+  {naam:'snoep',laag:true, w:14,h:22},
+  {naam:'jelly',laag:true, w:22,h:14},
+  {naam:'bij',  laag:false,w:20,h:14},
+  {naam:'wolk', laag:false,w:30,h:14},
+  {naam:'vogel',laag:false,w:22,h:12},
+];
+const VLIEGHOOGTE=38; // onderkant van vliegende dingen boven de grond: staan = geraakt, bukken = veilig
+function nieuwObstakel(){
+  const hoog = afstand>6 && Math.random()<.45;
+  const opties=SOORTEN.filter(s=>s.laag!==hoog);
+  const s=opties[Math.floor(Math.random()*opties.length)];
+  const y = s.laag ? GROND-s.h : GROND-VLIEGHOOGTE-s.h;
+  obstakels.push({...s, x:W+10, y, t:Math.random()*6, kleur:Math.floor(Math.random()*5), geraakt:[false,false]});
+}
+function stof(x){ for(let i=0;i<6;i++) deeltjes.push({x,y:GROND,vx:-20-Math.random()*40,vy:-Math.random()*40,l:.5,c:'#fff'}); }
+function knal(x,y,kleuren,n=14){ for(let i=0;i<n;i++){ const a=Math.random()*6.28,v=30+Math.random()*80; deeltjes.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:.6+Math.random()*.4,c:kleuren[i%kleuren.length]}); } }
+
+function beeldVan(s){
+  const pose = !s.opGrond?'springen':(s.bukt?'bukken':'staan');
+  return BEELD[s.pre+'_'+pose] || BEELD[s.pre+'_staan'] || {};
+}
+function kader(s){ // in wereldeenheden (beeldpixels / 2)
+  const b=beeldVan(s), w=(b.width||40)/2, h=(b.height||94)/2;
+  return {b, x:s.x+12-w/2, y:GROND-h+s.y, w, h};
+}
+function botst(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+
+function update(dt){
+  tijd+=dt;
+  leesControllers();
+  if(staat!=='spel') return;
+  afstand+=dt; snelheid=Math.min(230, 90+afstand*3); score+=dt*snelheid*.1;
+  notenKlok-=dt; if(notenKlok<=0){ const f=MELODIE[noot++%MELODIE.length]; if(f) bliep(f,f*.99,.12,'triangle',.035); notenKlok=.16; }
+  for(const s of SPELERS){
+    if(s.uit) continue;
+    const wilBukken = s.toetsBuk.some(k=>toets[k]) || s.padBuk || s.aanraakBuk;
+    s.bukt = wilBukken && s.opGrond;
+    if(!s.opGrond){
+      s.vy+=(wilBukken?1400:640)*dt; s.y+=s.vy*dt;
+      if(s.y>=0){ s.y=0; s.vy=0; s.opGrond=true; stof(s.x+8); }
+    }
+    s.onkwetsbaar=Math.max(0,s.onkwetsbaar-dt);
+  }
+  volgende-=dt; if(volgende<=0){ nieuwObstakel(); volgende = Math.max(.8, 1.9-afstand*.02) * (110/snelheid+.5) + Math.random()*.6; }
+  sterVolgende-=dt; if(sterVolgende<=0){ sterren.push({x:W+10,y:GROND-20-Math.random()*60,t:0}); sterVolgende=.6+Math.random()*1.2; }
+  for(const o of obstakels){ o.x-=snelheid*dt*(o.laag?1:1.15); o.t+=dt; }
+  for(const s of sterren){ s.x-=snelheid*dt; s.t+=dt; }
+  SPELERS.forEach((s,i)=>{
+    if(s.uit) return;
+    const k=kader(s), kh={x:k.x+4,y:k.y+4,w:k.w-8,h:k.h-5};
+    for(const o of obstakels){
+      if(o.geraakt[i] || s.onkwetsbaar>0) continue;
+      if(botst(kh,{x:o.x+3,y:o.y+3,w:o.w-6,h:o.h-6})){
+        o.geraakt[i]=true; s.levens--; s.onkwetsbaar=1.5; flits=.12;
+        knal(o.x+o.w/2,o.y+o.h/2,['#ff4d8d','#ffd23f','#fff']); bliep(400,80,.35,'sawtooth',.08);
+        if(s.levens<=0){ s.uit=true; knal(k.x+k.w/2,k.y+k.h/2,['#fff',s.kleur,'#ffd23f'],24); }
+      }
+    }
+    for(const st of sterren){
+      if(!st.pak && botst(kh,{x:st.x-6,y:st.y-6,w:12,h:12})){ st.pak=true; s.sterren++; score+=25; knal(st.x,st.y,['#ffd23f','#fff3a0','#7df9ff'],8); bliep(988,1976,.12,'square',.05); }
+    }
+  });
+  obstakels=obstakels.filter(o=>o.x>-40);
+  sterren=sterren.filter(s=>s.x>-10&&!s.pak);
+  if(SPELERS.every(s=>s.uit)){
+    staat='af'; tijd=0;
+    if(score>beste){ beste=Math.floor(score); try{localStorage.setItem('loua-midas-beste',beste);}catch(e){} }
+  }
+}
+
+// ---------- Tekenen ----------
+const HEMEL=['#ff9ad5','#ffb3c7','#ffc8b0','#ffe0a0','#fff3b0'];
+const REGENBOOG=['#ff4d6d','#ff9f1c','#ffe14d','#4ade80','#38bdf8','#a78bfa'];
+function rect(x,y,w,h,c){ g.fillStyle=c; g.fillRect(Math.round(x),Math.round(y),w,h); }
+function tekst(t,x,y,c='#fff',m=8,uitlijn='center'){
+  g.font=m+'px '+FONT; g.textAlign=uitlijn; g.textBaseline='top';
+  g.fillStyle='#2a1838'; g.fillText(t,x+1,y+1); g.fillStyle=c; g.fillText(t,x,y);
+}
+function wolkje(x,y,s,c='#fff'){ rect(x+4*s,y,8*s,2*s,c); rect(x+2*s,y+2*s,14*s,2*s,c); rect(x,y+4*s,20*s,3*s,c); }
+function heuvels(snel,basis,hoogte,kleur,stip,periode){
+  for(let x=0;x<=W;x+=2){
+    const wx=x+afstand*snel;
+    const y=basis-Math.round((Math.sin(wx/periode*6.28)*.5+.5)*hoogte);
+    rect(x,y,2,GROND-y,kleur);
+    if(stip && (Math.floor(wx/2)%9===0) && Math.floor(wx/7)%2===0) rect(x,y+6+(Math.floor(wx)%5)*3,2,2,stip);
+  }
+}
+function boompje(x,kleur){
+  rect(x+5,GROND-38,4,22,'#fff'); for(let i=0;i<22;i+=6) rect(x+5,GROND-38+i,4,3,'#ff4d8d');
+  rect(x,GROND-52,14,14,kleur); rect(x+2,GROND-54,10,18,kleur); rect(x+3,GROND-50,3,3,'#ffffffaa');
+}
+function achtergrond(){
+  HEMEL.forEach((c,i)=>rect(0,i*22,W,22,c));
+  for(let i=1;i<HEMEL.length;i++) for(let x=0;x<W;x+=4){ rect(x+(i%2)*2,i*22-2,2,2,HEMEL[i-1]); }
+  rect(0,110,W,40,HEMEL[4]);
+  const zx=262, zy=34; rect(zx-12,zy-8,24,16,'#ffe14d'); rect(zx-8,zy-12,16,24,'#ffe14d');
+  for(let i=0;i<8;i++){ const a=i/8*6.28+tijd*.5; rect(zx+Math.cos(a)*18-1,zy+Math.sin(a)*18-1,3,3,'#ffd23f'); }
+  rect(zx-5,zy-3,2,3,'#2a1838'); rect(zx+3,zy-3,2,3,'#2a1838'); rect(zx-4,zy+3,8,2,'#ff4d8d');
+  REGENBOOG.forEach((c,i)=>{ const r=90-i*5; for(let a=0;a<=Math.PI;a+=.02){ rect(70-Math.cos(a)*r, 150-Math.sin(a)*r,3,5,c);} });
+  for(let i=0;i<4;i++){ const x=((i*110-afstand*8-tijd*4)%440+440)%440-60; wolkje(x,14+i*13%40,i%2?2:1, i===2?'#fff6fd':'#fff'); }
+  heuvels(14,128,26,'#c4a1ff','#e6d6ff',140);
+  heuvels(30,138,22,'#7ee8a8','#fff',90);
+}
+let grondOff=0;
+function grond(){
+  const off=Math.floor(grondOff)%32;
+  for(let x=-32;x<W+32;x+=16){
+    const kol=Math.floor((x+Math.floor(grondOff))/16);
+    rect(x-off%16,GROND,16,6,'#5ee36a'); rect(x-off%16,GROND+6,16,24, kol%2? '#ff8fc8':'#ffb3dc');
+    rect(x-off%16+6,GROND+14,4,4,'#ffffff33'); }
+  for(let x=0;x<W;x+=4) rect(x,GROND-2+((x/4+Math.floor(grondOff/4))%3===0?0:1),4,2,'#3cc659');
+}
+function teken_obstakel(o){
+  const x=Math.round(o.x), y=Math.round(o.y), b=Math.sin(o.t*8)>0;
+  const kl=['#ff4d8d','#ff9f1c','#38bdf8','#a78bfa','#4ade80'][o.kleur];
+  switch(o.naam){
+    case 'paddo': rect(x+6,y+8,8,10,'#fff3d6'); rect(x,y+2,20,8,kl); rect(x+3,y,14,3,kl); rect(x+4,y+3,3,3,'#fff'); rect(x+12,y+4,4,3,'#fff');
+      rect(x+7,y+11,2,2,'#2a1838'); rect(x+11,y+11,2,2,'#2a1838'); break;
+    case 'snoep': rect(x+6,y+8,2,14,'#fff'); rect(x,y,14,10,kl); rect(x+2,y+2,10,6,'#fff'); rect(x+4,y+3,6,4,kl); break;
+    case 'jelly': { const h=b?14:12; rect(x,y+14-h,22,h,kl+'cc'); rect(x+3,y+14-h+2,4,3,'#ffffff88'); rect(x+6,y+6,2,3,'#2a1838'); rect(x+14,y+6,2,3,'#2a1838'); rect(x+9,y+10,4,1,'#2a1838'); break; }
+    case 'bij': rect(x+2,y+4,16,10,'#ffd23f'); rect(x+7,y+4,3,10,'#2a1838'); rect(x+12,y+4,3,10,'#2a1838'); rect(x,y+8,3,2,'#2a1838');
+      rect(x+5,y+(b?0:2),8,4,'#e0f7ffcc'); rect(x+4,y+7,2,2,'#fff'); break;
+    case 'wolk': { const yy=y+(b?0:1); rect(x+6,yy,18,4,'#7a6fd8'); rect(x,yy+4,30,8,'#7a6fd8'); rect(x+3,yy+3,24,8,'#9b91f0');
+      rect(x+9,yy+6,2,2,'#fff'); rect(x+18,yy+6,2,2,'#fff'); if(b) rect(x+12,yy+12,2,4,'#7df9ff'); break; }
+    case 'vogel': rect(x+4,y+4,14,7,kl); rect(x,y+6,4,2,'#ff9f1c'); rect(x+6,y+5,2,2,'#2a1838'); rect(x+18,y+3,4,3,kl);
+      rect(x+8,y+(b?0:9),7,4,'#fff'); break;
+  }
+}
+function teken_ster(s){
+  const x=Math.round(s.x), y=Math.round(s.y+Math.sin(s.t*5)*2);
+  rect(x-1,y-5,3,11,'#ffd23f'); rect(x-5,y-1,11,3,'#ffd23f'); rect(x-3,y-3,7,7,'#ffd23f'); rect(x-1,y-1,2,2,'#fff');
+}
+// kinderen tekenen op volle resolutie (buiten de 2x-schaal)
+function teken_kind(s, i){
+  if(s.uit) return;
+  const k=kader(s);
+  rect(k.x+4, GROND-1, k.w-8, 2, '#00000033');
+  if(s.onkwetsbaar>0 && Math.floor(tijd*20)%2) return;
+  if(!k.b.width) return;
+  g.save(); g.setTransform(1,0,0,1,0,0);
+  // klein huppeltje tijdens het rennen
+  const hup = s.opGrond && !s.bukt && staat==='spel' ? Math.round(Math.abs(Math.sin(tijd*12+i*1.7))*3) : 0;
+  g.drawImage(k.b, Math.round(k.x*2), Math.round(k.y*2)-hup);
+  g.restore();
+}
+function hartje(x,y,vol){ const c=vol?'#ff4d6d':'#ffffff66'; rect(x,y+1,3,3,c); rect(x+4,y+1,3,3,c); rect(x+1,y,2,1,c); rect(x+4,y,2,1,c); rect(x+1,y+4,5,1,c); rect(x+2,y+5,3,1,c); }
+
+function teken(){
+  g.setTransform(2,0,0,2,0,0); g.imageSmoothingEnabled=false;
+  achtergrond(); grond();
+  for(const s of sterren) teken_ster(s);
+  for(const o of obstakels) if(!(o.geraakt[0]&&o.geraakt[1])) teken_obstakel(o);
+  if(staat!=='titel') SPELERS.forEach(teken_kind);
+  for(const d of deeltjes) rect(d.x,d.y,2,2,d.c);
+  if(staat==='spel'||staat==='af'){
+    tekst(String(Math.floor(score)).padStart(6,'0'),W-6,6,'#fff',8,'right');
+    SPELERS.forEach((s,i)=>{
+      const y=6+i*12; tekst(s.naam,6,y,s.uit?'#ffffff88':s.kleur,5,'left');
+      for(let h=0;h<3;h++) hartje(56+h*9,y-1,h<s.levens);
+      tekst('*'+s.sterren,88,y,'#ffd23f',5,'left');
+    });
+  }
+  if(staat==='titel'){
+    rect(0,0,W,H,'#2a183855');
+    const t='LOUA & MIDAS'; for(let i=0;i<t.length;i++) tekst(t[i], 50+i*20, 10+Math.round(Math.sin(tijd*4+i*.6)*3), REGENBOOG[i%6], 16);
+    tekst('GAAN NAAR ZWITSERLAND', W/2, 34, '#fff', 8);
+    g.save(); g.setTransform(1,0,0,1,0,0);
+    SPELERS.forEach((s,i)=>{
+      const b=BEELD[s.pre+'_staan']; if(!b||!b.width) return;
+      const hup=Math.round(Math.abs(Math.sin(tijd*5+i*1.5))*6);
+      g.drawImage(b, i?380:220, 104-hup);
+    });
+    g.restore();
+    tekst('LOUA', 125, 150, SPELERS[0].kleur, 6);
+    tekst('MIDAS', 205, 150, SPELERS[1].kleur, 6);
+    if(Math.floor(tijd*2)%2) tekst('DRUK OP A OF SPATIE', W/2, 162, '#fff', 7);
+    const pads=leesControllers();
+    tekst(pads?pads+' CONTROLLER'+(pads>1?'S':'')+' GEVONDEN':'XBOX: A = SPRING  B = BUK', W/2, 173, '#ffe0f4', 5);
+    if(beste) tekst('RECORD '+beste, W/2, 52, '#ffd23f', 5);
+  }
+  if(staat==='af'){
+    rect(0,0,W,H,'#2a183888');
+    tekst('OEPS!', W/2, 44, '#ff4d8d', 16);
+    tekst('SCORE '+Math.floor(score), W/2, 74, '#fff', 8);
+    SPELERS.forEach((s,i)=>tekst(s.naam+'  *'+s.sterren, W/2, 92+i*12, s.kleur, 6));
+    tekst('RECORD '+beste, W/2, 122, '#ffd23f', 8);
+    if(tijd>1 && Math.floor(tijd*2)%2) tekst('A OF SPATIE = OPNIEUW', W/2, 144, '#fff', 7);
+  }
+  if(flits>0) rect(0,0,W,H,'#ffffff55');
+}
+
+let vorige=performance.now();
+function lus(nu){
+  const dt=Math.min(.05,(nu-vorige)/1000); vorige=nu;
+  update(dt);
+  grondOff += (staat==='spel'?snelheid:30)*dt;
+  for(const d of deeltjes){ d.x+=d.vx*dt; d.y+=d.vy*dt; d.vy+=150*dt; d.l-=dt; }
+  deeltjes=deeltjes.filter(d=>d.l>0);
+  flits=Math.max(0,flits-dt);
+  if(staat==='titel') afstand+=dt*.6;
+  teken();
+  requestAnimationFrame(lus);
+}
+requestAnimationFrame(lus);
+</script>
+</body>
+</html>
