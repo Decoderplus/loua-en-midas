@@ -155,7 +155,7 @@ const SOORTEN=[
 ];
 const VLIEGHOOGTE=38; // onderkant van vliegende dingen boven de grond: staan = geraakt, bukken = veilig
 function nieuwObstakel(){
-  const hoog = afstand>6 && Math.random()<.45;
+  const hoog = false; // alleen nog springen: geen vliegende dingen meer
   const opties=SOORTEN.filter(s=>s.laag!==hoog);
   const s=opties[Math.floor(Math.random()*opties.length)];
   const y = s.laag ? GROND-s.h : GROND-VLIEGHOOGTE-s.h;
@@ -182,7 +182,7 @@ function update(dt){
   notenKlok-=dt; if(notenKlok<=0){ const f=MELODIE[noot++%MELODIE.length]; if(f) bliep(f,f*.99,.12,'triangle',.035); notenKlok=.16; }
   for(const s of SPELERS){
     if(s.uit) continue;
-    const wilBukken = s.toetsBuk.some(k=>toets[k]) || s.padBuk || s.aanraakBuk;
+    const wilBukken = false; // bukken is uitgezet
     s.bukt = wilBukken && s.opGrond;
     if(!s.opGrond){
       s.vy+=(wilBukken?1400:640)*dt; s.y+=s.vy*dt;
@@ -324,7 +324,7 @@ function teken(){
     tekst('MIDAS', 205, 150, SPELERS[1].kleur, 6);
     if(Math.floor(tijd*2)%2) tekst('DRUK OP A OF SPATIE', W/2, 162, '#fff', 7);
     const pads=leesControllers();
-    tekst(pads?pads+' CONTROLLER'+(pads>1?'S':'')+' GEVONDEN':'XBOX: A = SPRING  B = BUK', W/2, 173, '#ffe0f4', 5);
+    tekst(pads?pads+' CONTROLLER'+(pads>1?'S':'')+' GEVONDEN':'XBOX: A = SPRINGEN', W/2, 173, '#ffe0f4', 5);
     if(beste) tekst('RECORD '+beste, W/2, 52, '#ffd23f', 5);
   }
   if(staat==='af'){
