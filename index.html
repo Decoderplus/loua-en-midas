@@ -246,7 +246,8 @@ function kader(s){ // in wereldeenheden (beeldpixels / 2)
 function botst(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
 
 // ---------- Finale: kasteel op de berg ----------
-const EINDSCORE=1300, KASTEEL_STOP=215, BERG_H=80, BERG_HELLING=.8;
+const EINDTIJD=90, // na anderhalve minuut het kasteel (dan sta je rond de 1300 punten)
+      KASTEEL_STOP=215, BERG_H=80, BERG_HELLING=.8;
 let kasteelX=null, finaleT=0, wereldStil=false, grondV=0;
 function updateFinale(dt){
   finaleT+=dt;
@@ -314,8 +315,8 @@ function update(dt){
   muziek();
   if(staat==='finale' || staat==='einde'){ updateFinale(dt); return; }
   if(staat!=='spel') return;
-  afstand+=dt; snelheid=Math.min(230, 90+afstand*3); score+=dt*snelheid*.1;
-  if(score>=EINDSCORE){ staat='finale'; finaleT=0; kasteelX=W+90; }
+  afstand+=dt; snelheid=Math.min(230, 90+afstand*3); score+=dt*snelheid*.05;
+  if(afstand>=EINDTIJD){ staat='finale'; finaleT=0; kasteelX=W+90; }
   for(const s of SPELERS){
     if(s.uit) continue;
     const wilBukken = false; // bukken is uitgezet
@@ -342,7 +343,7 @@ function update(dt){
       }
     }
     for(const st of sterren){
-      if(!st.pak && botst(kh,{x:st.x-6,y:st.y-6,w:12,h:12})){ st.pak=true; s.sterren++; score+=25; knal(st.x,st.y,['#ffd23f','#fff3a0','#7df9ff'],8); bliep(988,1976,.12,'square',.05); }
+      if(!st.pak && botst(kh,{x:st.x-6,y:st.y-6,w:12,h:12})){ st.pak=true; s.sterren++; score+=10; knal(st.x,st.y,['#ffd23f','#fff3a0','#7df9ff'],8); bliep(988,1976,.12,'square',.05); }
     }
   });
   obstakels=obstakels.filter(o=>o.x>-40);
