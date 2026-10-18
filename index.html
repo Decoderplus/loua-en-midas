@@ -86,15 +86,72 @@ function bliep(f1,f2,duur,type='square',vol=.08){
     o.connect(v); v.connect(ac.destination); o.start(t); o.stop(t+duur);
   }catch(e){}
 }
-const MELODIE=[523,659,784,659,880,784,659,587, 523,659,784,1047,988,784,659,0];
-let noot=0, notenKlok=0;
+// ---------- Muziek: eigen deuntje in de geest van Kirby (vrolijk, huppelend, lange akkoordenreeksen) ----------
+// Per maat: akkoord + 8 achtste noten melodie ('-' = aanhouden, '.' = rust). Drie delen: A, B, brug.
+const LIED = [
+  // A
+  ['C',  'E5 . G5 . C6 - B5 A5'], ['Am', 'G5 - E5 . A5 . G5 E5'], ['F',  'F5 . A5 . C6 - D6 C6'], ['G',  'B5 - G5 . D5 . G5 .'],
+  ['C',  'E5 G5 C6 . E6 - D6 C6'], ['Am', 'C6 B5 A5 . E5 . A5 .'], ['Dm G','F5 A5 D6 . B5 . G5 .'], ['C',  'C6 - - - G5 . C6 .'],
+  // B
+  ['F',  'A5 . A5 C6 . A5 F5 .'], ['G',  'B5 . B5 D6 . B5 G5 .'], ['Em', 'G5 . B5 . E6 - D6 B5'], ['Am', 'C6 - A5 . E5 - . .'],
+  ['Dm', 'D5 F5 A5 . D6 . C6 A5'], ['G',  'B5 . D6 . G6 - F6 D6'], ['E',  'E6 - D6 . B5 . G#5 .'], ['Am', 'A5 - - - . . E5 G5'],
+  // brug
+  ['Bb', 'F5 . Bb5 . D6 - C6 Bb5'], ['C',  'G5 . C6 . E6 - D6 C6'], ['Am', 'A5 . C6 E6 . C6 A5 .'], ['Dm', 'F5 - A5 . D6 - . .'],
+  ['Bb', 'D6 C6 Bb5 . F5 . Bb5 .'], ['C',  'E6 D6 C6 . G5 . C6 .'], ['D',  'F#5 . A5 . D6 - F#6 .'], ['G',  'G6 - - - D6 . B5 .'],
+  // A nog eens, met slot
+  ['C',  'E5 . G5 . C6 - B5 A5'], ['Am', 'G5 - E5 . A5 . G5 E5'], ['F',  'F5 . A5 . C6 - D6 C6'], ['G',  'B5 - G5 . D5 . G5 .'],
+  ['F',  'A5 . C6 . F6 - E6 D6'], ['G',  'D6 . B5 . G5 . B5 D6'], ['Dm G','F6 E6 D6 . B5 . G5 B5'], ['C',  'C6 - - - . . . .'],
+];
+const AKKOORD = { C:[0,4,7], Am:[9,12,16], F:[5,9,12], G:[7,11,14], Dm:[2,5,9], Em:[4,7,11], E:[4,8,11], Bb:[-2,2,5], D:[2,6,9] };
+const NOOTNR = { C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,Bb:10,B:11 };
+function freq(n){ const m=n.match(/^([A-G][#b]?)(\d)$/); return 440*Math.pow(2,(NOOTNR[m[1]]+(+m[2]+1)*12-69)/12); }
+function grondF(halve, oct){ return 440*Math.pow(2,(halve+(oct+1)*12-69)/12); }
+function toon(f,t,duur,type,vol){
+  const o=ac.createOscillator(), v=ac.createGain();
+  o.type=type; o.frequency.setValueAtTime(f,t);
+  v.gain.setValueAtTime(vol,t); v.gain.setValueAtTime(vol,t+duur*.7); v.gain.exponentialRampToValueAtTime(.0005,t+duur);
+  o.connect(v); v.connect(ac.destination); o.start(t); o.stop(t+duur+.02);
+}
+const ACHTSTE=.19; // tempo
+let muziekAan=false, volgendeTel=0, tel=0;
+function muziek(){
+  if(!ac || !muziekAan) return;
+  if(volgendeTel < ac.currentTime) volgendeTel = ac.currentTime+.05;
+  while(volgendeTel < ac.currentTime+.25){       // een kwart seconde vooruit inplannen
+    const maat = LIED[Math.floor(tel/8)%LIED.length], stap = tel%8, t = volgendeTel;
+    const akk = maat[0].split(' '), ak = AKKOORD[akk[stap<4||akk.length<2?0:1]];
+    const mel = maat[1].split(' ');
+    // melodie: noot duurt tot de volgende noot of rust
+    if(mel[stap] && mel[stap]!=='-' && mel[stap]!=='.'){
+      let l=1; while(stap+l<8 && mel[stap+l]==='-') l++;
+      toon(freq(mel[stap]), t, ACHTSTE*l*.92, 'square', .045);
+      toon(freq(mel[stap])*2.003, t, ACHTSTE*l*.6, 'triangle', .012); // glinstering
+    }
+    // bas: huppelend grondtoon-kwint
+    if(stap%2===0) toon(grondF(ak[0]+(stap%4===2?7:0),2), t, ACHTSTE*1.6, 'triangle', .11);
+    // arpeggio op de achtergrond
+    toon(grondF(ak[stap%3],4)*(stap>=6?2:1), t, ACHTSTE*.5, 'square', .016);
+    // drumpjes: ruisje op de tellen
+    if(stap%2===1){ const b=ac.createBuffer(1,ac.sampleRate*.04,ac.sampleRate), d=b.getChannelData(0);
+      for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length);
+      const s=ac.createBufferSource(), v=ac.createGain(); v.gain.value=stap===3||stap===7?.05:.025; s.buffer=b; s.connect(v); v.connect(ac.destination); s.start(t); }
+    volgendeTel += ACHTSTE; tel++;
+  }
+}
+// slotfanfare als ze bij het kasteel zijn
+function fanfare(){
+  if(!ac) return; const t=ac.currentTime+.05;
+  ['C5','E5','G5','C6','G5','C6','E6','G6'].forEach((n,i)=>toon(freq(n),t+i*.12,i===7?1.2:.14,'square',.06));
+  [0,4,7].forEach(h=>toon(grondF(h,3),t+.96,1.4,'triangle',.06));
+}
 
 // ---------- Besturing: toetsenbord, Xbox-controller, aanraken ----------
 const toets={};
 function actie(i){ // spring-knop van speler i
   if(document.getElementById("slot")) return;
   if(staat==='titel'){ start(); return; }
-  if(staat==='af'){ if(tijd>1) staat='titel'; return; }
+  if(staat==='af' || staat==='einde'){ if(tijd>1.5) { staat='titel'; muziekAan=false; } return; }
+  if(staat==='finale') return;
   const s=SPELERS[i];
   if(!s.uit && s.opGrond){ s.vy=-250; s.opGrond=false; bliep(i?300:420,i?900:1200,.15); stof(s.x+8); }
 }
@@ -141,7 +198,9 @@ addEventListener('pointerup',los); addEventListener('pointercancel',los);
 function start(){
   staat='spel'; score=0; snelheid=90; afstand=0; obstakels=[]; sterren=[]; deeltjes=[];
   volgende=1.5; sterVolgende=.8; SPELERS.forEach(resetSpeler);
+  kasteelX=null; finaleT=0; wereldStil=false;
   bliep(400,1200,.3,'square',.06);
+  muziekAan=true; tel=0; volgendeTel=0;
 }
 
 // ---------- Wereld ----------
@@ -174,12 +233,77 @@ function kader(s){ // in wereldeenheden (beeldpixels / 2)
 }
 function botst(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
 
+// ---------- Finale: kasteel op de berg ----------
+const EINDSCORE=2000, KASTEEL_STOP=215, BERG_H=80, BERG_HELLING=.8;
+let kasteelX=null, finaleT=0, wereldStil=false, grondV=0;
+function updateFinale(dt){
+  finaleT+=dt;
+  if(!wereldStil){
+    // nog even doorrennen tot het kasteel in beeld staat, dan afremmen
+    const rem = Math.max(0, Math.min(1, (kasteelX-KASTEEL_STOP)/60));
+    const v = snelheid*Math.max(.15,rem);
+    kasteelX -= v*dt; afstand += dt*v/snelheid; grondV=v;
+    for(const o of obstakels) o.x-=v*dt; for(const s of sterren) s.x-=v*dt;
+    for(const s of SPELERS) if(!s.opGrond){ s.vy+=640*dt; s.y+=s.vy*dt; if(s.y>=0){ s.y=0; s.vy=0; s.opGrond=true; } }
+    if(kasteelX<=KASTEEL_STOP){
+      kasteelX=KASTEEL_STOP; wereldStil=true; finaleT=0; grondV=0; muziekAan=false; fanfare();
+      // iedereen doet mee met het feest, ook wie af was
+      SPELERS.forEach((s,i)=>{ s.uit=false; s.onkwetsbaar=0; s.startX=s.x; s.hoek=Math.PI+i*Math.PI; });
+    }
+    return;
+  }
+  // 0-1,2 s: naar de berg toe springen; 1,2-6 s: rondom het kasteel huppelen; daarna wegvliegen
+  SPELERS.forEach((s,i)=>{
+    const cx=kasteelX-12, top=-92;
+    if(finaleT<6){
+      s.hoek += dt*1.9;
+      const hup = Math.abs(Math.sin(finaleT*5.5+i*1.3))*20;
+      const dx = Math.cos(s.hoek)*58, doelX = cx+dx;
+      const doelY = -(BERG_H-Math.max(0,(Math.abs(dx)-14)/BERG_HELLING)) + 4 - Math.sin(s.hoek)*6 - hup;
+      const k = Math.min(1, finaleT/1.2);
+      s.x = s.startX+(doelX-s.startX)*k; s.y = doelY*k - hup*(1-k);
+      s.opGrond = hup<3; s.voor = Math.sin(s.hoek)<0;
+      if(s.opGrond && Math.random()<.3) knal(s.x+12, GROND+s.y, ['#fff','#ffe0f4'], 2);
+    } else {
+      const vt = finaleT-6;
+      s.x += (60+vt*40)*dt*(i?1:.8); s.y -= (40+vt*vt*90)*dt; s.opGrond=false; s.voor=true;
+      if(Math.random()<.8) deeltjes.push({x:s.x+12,y:GROND+s.y+40,vx:-30+Math.random()*20,vy:20+Math.random()*30,l:.8,c:REGENBOOG[Math.floor(Math.random()*6)]});
+    }
+  });
+  if(finaleT>2 && Math.random()<dt*2.5) knal(40+Math.random()*240, 20+Math.random()*60, [REGENBOOG[Math.floor(Math.random()*6)],'#fff','#ffd23f'], 20);
+  if(finaleT>9.5 && staat==='finale'){
+    staat='einde'; tijd=0;
+    if(score>beste){ beste=Math.floor(score); try{localStorage.setItem('loua-midas-beste',beste);}catch(e){} }
+  }
+}
+function tekenBerg(){
+  if(kasteelX===null) return;
+  const x=Math.round(kasteelX), voet=GROND;
+  // berg met sneeuwtop
+  for(let r=0;r<BERG_H;r+=2){ const half=Math.round(14+r*BERG_HELLING); rect(x-half, voet-BERG_H+r, half*2, 2, r<20?'#ffffff':(r<24?'#e6eefc':'#8fa3d9')); }
+  for(let r=28;r<BERG_H;r+=8) rect(x-10-r*.3, voet-BERG_H+r, 4, 2, '#a9b9e6');
+  // kasteel bovenop
+  const b=voet-BERG_H;
+  rect(x-22,b-26,44,26,'#fff3fb'); rect(x-22,b-26,44,2,'#ffb3dc');
+  for(let i=0;i<5;i++) rect(x-22+i*10,b-30,6,4,'#fff3fb');
+  rect(x-5,b-14,10,14,'#7a4a2a'); rect(x-4,b-13,8,1,'#a8724a');
+  [[-30,-46,12],[18,-46,12],[-6,-60,12]].forEach(([dx,dy,w])=>{
+    rect(x+dx,b+dy,w,-dy,'#ffe0f4'); rect(x+dx+4,b+dy+8,4,6,'#5fd4ff');
+    for(let k=0;k<w/2;k++) rect(x+dx+k,b+dy-2-k,w-2*k,2,'#ff4d8d');
+  });
+  // Zwitserse vlag
+  const fx=x-1, fy=b-82;
+  rect(fx,fy,1,16,'#2a1838'); rect(fx+1,fy,12,10,'#e8243c'); rect(fx+6,fy+2,2,6,'#fff'); rect(fx+4,fy+4,6,2,'#fff');
+}
+
 function update(dt){
   tijd+=dt;
   leesControllers();
+  muziek();
+  if(staat==='finale' || staat==='einde'){ updateFinale(dt); return; }
   if(staat!=='spel') return;
   afstand+=dt; snelheid=Math.min(230, 90+afstand*3); score+=dt*snelheid*.1;
-  notenKlok-=dt; if(notenKlok<=0){ const f=MELODIE[noot++%MELODIE.length]; if(f) bliep(f,f*.99,.12,'triangle',.035); notenKlok=.16; }
+  if(score>=EINDSCORE){ staat='finale'; finaleT=0; kasteelX=W+90; }
   for(const s of SPELERS){
     if(s.uit) continue;
     const wilBukken = false; // bukken is uitgezet
@@ -212,7 +336,7 @@ function update(dt){
   obstakels=obstakels.filter(o=>o.x>-40);
   sterren=sterren.filter(s=>s.x>-10&&!s.pak);
   if(SPELERS.every(s=>s.uit)){
-    staat='af'; tijd=0;
+    staat='af'; tijd=0; muziekAan=false;
     if(score>beste){ beste=Math.floor(score); try{localStorage.setItem('loua-midas-beste',beste);}catch(e){} }
   }
 }
@@ -283,7 +407,7 @@ function teken_ster(s){
 function teken_kind(s, i){
   if(s.uit) return;
   const k=kader(s);
-  rect(k.x+4, GROND-1, k.w-8, 2, '#00000033');
+  if(staat==='spel') rect(k.x+4, GROND-1, k.w-8, 2, '#00000033');
   if(s.onkwetsbaar>0 && Math.floor(tijd*20)%2) return;
   if(!k.b.width) return;
   g.save(); g.setTransform(1,0,0,1,0,0);
@@ -299,9 +423,12 @@ function teken(){
   achtergrond(); grond();
   for(const s of sterren) teken_ster(s);
   for(const o of obstakels) if(!(o.geraakt[0]&&o.geraakt[1])) teken_obstakel(o);
-  if(staat!=='titel') SPELERS.forEach(teken_kind);
+  const feest = staat==='finale'||staat==='einde';
+  if(feest) SPELERS.forEach((s,i)=>{ if(!s.voor) teken_kind(s,i); });
+  tekenBerg();
+  if(staat!=='titel') SPELERS.forEach((s,i)=>{ if(!feest||s.voor) teken_kind(s,i); });
   for(const d of deeltjes) rect(d.x,d.y,2,2,d.c);
-  if(staat==='spel'||staat==='af'){
+  if(staat!=='titel'){
     tekst(String(Math.floor(score)).padStart(6,'0'),W-6,6,'#fff',8,'right');
     SPELERS.forEach((s,i)=>{
       const y=6+i*12; tekst(s.naam,6,y,s.uit?'#ffffff88':s.kleur,5,'left');
@@ -335,6 +462,14 @@ function teken(){
     tekst('RECORD '+beste, W/2, 122, '#ffd23f', 8);
     if(tijd>1 && Math.floor(tijd*2)%2) tekst('A OF SPATIE = OPNIEUW', W/2, 144, '#fff', 7);
   }
+  if(staat==='einde'){
+    rect(0,0,W,H,'#2a183866');
+    tekst('HOERA!', W/2, 40, '#ffd23f', 16);
+    tekst('JULLIE ZIJN IN ZWITSERLAND!', W/2, 66, '#fff', 8);
+    tekst('SCORE '+Math.floor(score), W/2, 86, '#fff', 8);
+    SPELERS.forEach((s,i)=>tekst(s.naam+'  *'+s.sterren, W/2, 102+i*12, s.kleur, 6));
+    if(tijd>1.5 && Math.floor(tijd*2)%2) tekst('A OF SPATIE = OPNIEUW', W/2, 140, '#fff', 7);
+  }
   if(flits>0) rect(0,0,W,H,'#ffffff55');
 }
 
@@ -342,7 +477,7 @@ let vorige=performance.now();
 function lus(nu){
   const dt=Math.min(.05,(nu-vorige)/1000); vorige=nu;
   update(dt);
-  grondOff += (staat==='spel'?snelheid:30)*dt;
+  grondOff += (staat==='spel'?snelheid:(staat==='finale'||staat==='einde')?grondV:30)*dt;
   for(const d of deeltjes){ d.x+=d.vx*dt; d.y+=d.vy*dt; d.vy+=150*dt; d.l-=dt; }
   deeltjes=deeltjes.filter(d=>d.l>0);
   flits=Math.max(0,flits-dt);
